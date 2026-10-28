@@ -19,6 +19,20 @@ Settings live in `appsettings.json` (section `Deco`) and can be overridden by en
 `Deco__Host`, `Deco__Password`: `Host`, `Username` (default `admin`), `PollIntervalSeconds`, `RetentionHours`,
 `SpeedUnitBytes`, `DatabasePath`, and `Urls` (listen address/port).
 
+## Run as a Windows service
+
+From an **elevated** PowerShell (stop any `dotnet run` instance on the same port first):
+
+```powershell
+.\scripts\install-service.ps1 [-Port 5180] [-OpenFirewall] [-Reconfigure]
+.\scripts\remove-service.ps1 [-PurgeData]
+```
+
+- Publishes to `%ProgramFiles%\DecoPlotter` and registers the `DecoPlotter` service (LocalService, delayed auto-start, restart on failure).
+- Prompts for the Deco host, username and password and stores them in `%ProgramData%\DecoPlotter\settings.json` (ACL-restricted). User-secrets are not used by the service. Re-run with `-Reconfigure` to change them.
+- The database lives in `%ProgramData%\DecoPlotter\data`; removal keeps it unless `-PurgeData` is given.
+- Logs go to the Windows Event Viewer (Application log, source `DecoPlotter`).
+
 ## API
 
 Interactive docs (Scalar) are at **http://localhost:5180/docs**; the raw OpenAPI 3.1 document is at `/openapi/v1.json`.

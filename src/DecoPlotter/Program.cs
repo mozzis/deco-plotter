@@ -1,8 +1,20 @@
 using DecoPlotter.Deco;
 using DecoPlotter.Services;
 using Scalar.AspNetCore;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
-var builder = WebApplication.CreateBuilder(args);
+// A published build must find wwwroot next to the exe regardless of the working directory.
+var contentRoot = Directory.Exists(Path.Combine(AppContext.BaseDirectory, "wwwroot")) ? AppContext.BaseDirectory : null;
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = contentRoot });
+
+// As a Windows service there are no user-secrets and no sensible working directory, so the installer
+// writes settings (including the password) to a protected file under ProgramData. DECO_SETTINGS can point
+// elsewhere for testing; plain `dotnet run` never reads this file.
+builder.Host.UseWindowsService(o => o.ServiceName = "DecoPlotter");
+var serviceSettings = Environment.GetEnvironmentVariable("DECO_SETTINGS")
+    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DecoPlotter", "settings.json");
+if (WindowsServiceHelpers.IsWindowsService() || Environment.GetEnvironmentVariable("DECO_SETTINGS") is not null)
+    builder.Configuration.AddJsonFile(serviceSettings, optional: true, reloadOnChange: false);
 builder.Services.Configure<DecoOptions>(builder.Configuration.GetSection(DecoOptions.Section));
 builder.Services.AddSingleton<DecoClient>();
 builder.Services.AddSingleton<SampleStore>();
