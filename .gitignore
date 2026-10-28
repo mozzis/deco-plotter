@@ -1,0 +1,28 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Runtime data (SQLite history) and logs
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Secrets / local config
+appsettings.*.local.json
+secrets.json
+.env
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# Node (if tooling is ever added)
+node_modules/
