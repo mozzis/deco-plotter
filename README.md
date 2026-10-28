@@ -21,14 +21,16 @@ Settings live in `appsettings.json` (section `Deco`) and can be overridden by en
 
 ## API
 
+Interactive docs (Scalar) are at **http://localhost:5180/docs**; the raw OpenAPI 3.1 document is at `/openapi/v1.json`.
+
 | Endpoint | Description |
 |---|---|
 | `GET /api/status` | last poll time/error, current router rate |
 | `GET /api/router/current` | current WAN up/down in bytes/s |
-| `GET /api/router/history?minutes=60&maxPoints=600` | downsampled history + peak and total bytes |
+| `GET /api/router/history?minutes=60&maxPoints=600&to=<unix>` | downsampled history + peak and total bytes; `to` (optional, Unix seconds) ends the window in the past instead of now |
 | `GET /api/devices[?all=true]` | connected devices with current rates |
 | `GET /api/devices/{mac}` | one device |
-| `GET /api/devices/{mac}/history?minutes=60` | history for one device |
+| `GET /api/devices/{mac}/history?minutes=60&to=<unix>` | history for one device (same `to` option) |
 | `GET /metrics` | Prometheus metrics (see below) |
 | `GET /api/usage?range=month` | per-device and router byte totals for `today`, `yesterday`, `week` (from Monday), `month`, `last7`, `last30`, or `custom` with `&from=yyyy-MM-dd&to=yyyy-MM-dd` |
 | `GET /api/usage/{mac\|router}/daily?range=last30` | per-day totals for one device or the router |

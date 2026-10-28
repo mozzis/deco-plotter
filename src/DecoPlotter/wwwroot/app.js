@@ -31,7 +31,14 @@ function makeChart(canvas) {
       scales: {
         x: {
           type: 'linear', grid: { color: '#2c3235' },
-          ticks: { color: '#8e8e9e', maxTicksLimit: 8, callback: v => new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+          ticks: {
+            color: '#8e8e9e', maxTicksLimit: 8,
+            callback: v => {
+              const d = new Date(v);
+              const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return Number($('range').value) > 1440 ? `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${t}` : t;
+            },
+          },
         },
         y: { beginAtZero: true, grid: { color: '#2c3235' }, ticks: { color: '#8e8e9e', callback: v => rate(v) } },
       },
@@ -60,7 +67,56 @@ async function getJson(url) {
 function plot(chart, hist) {
   chart.data.datasets[0].data = hist.points.map(p => ({ x: p.t * 1000, y: p.down }));
   chart.data.datasets[1].data = hist.points.map(p => ({ x: p.t * 1000, y: p.up }));
+  chart.options.scales.x.min = hist.from * 1000;
+  chart.options.scales.x.max = hist.to * 1000;
   chart.update();
+}
+
+// Shared time window. windowEnd === null means "live" (window ends at the present).
+let windowEnd = null;
+let oldestSample = null;
+let chartsDirty = true;
+
+const nowSec = () => Math.floor(Date.now() / 1000);
+const windowSec = () => Number($('range').value) * 60;
+const stepSec = () => ($('step').value === 'window' ? windowSec() : Number($('step').value) * 60);
+const effectiveEnd = () => windowEnd ?? nowSec();
+
+// Clamp the window so it never starts before the oldest stored sample, and snap to live near the present.
+function setWindowEnd(end) {
+  const now = nowSec();
+  if (oldestSample !== null) end = Math.max(end, oldestSample + windowSec());
+  windowEnd = end >= now - 5 ? null : end;
+  chartsDirty = true;
+  updateNav();
+  refresh();
+}
+
+function canGoBack() {
+  return oldestSample !== null && effectiveEnd() - windowSec() > oldestSample;
+}
+
+function fmtWindow(s) {
+  return new Date(s * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function updateNav() {
+  $('back').disabled = !canGoBack();
+  $('fwd').disabled = windowEnd === null;
+  $('now').disabled = windowEnd === null;
+  const w = $('window');
+  if (windowEnd === null) {
+    w.textContent = `Live · last ${$('range').selectedOptions[0].textContent}`;
+    w.className = 'win live';
+  } else {
+    w.textContent = `${fmtWindow(windowEnd - windowSec())} – ${fmtWindow(windowEnd)}`;
+    w.className = 'win';
+  }
+  if (canGoBack() === false && oldestSample !== null) {
+    $('back').title = `No data before ${fmtWindow(oldestSample)} (older samples are purged)`;
+  } else {
+    $('back').title = 'Step back (←)';
+  }
 }
 
 function summary(h) {
@@ -107,12 +163,18 @@ function syncDeviceList(devices, force = false) {
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
 }
 
+let refreshSeq = 0;
+let lastMac = null;
 async function refresh() {
+  const seq = ++refreshSeq;
   const minutes = $('range').value;
   try {
     const [status, devices] = await Promise.all([getJson('api/status'), getJson('api/devices')]);
+    if (seq !== refreshSeq) return;
     lastDevices = devices;
     syncDeviceList(devices);
+    oldestSample = status.oldestSample;
+    updateNav();
 
     const st = $('status');
     if (status.lastError) { st.textContent = `Router error: ${status.lastError}`; st.className = 'err'; }
@@ -121,27 +183,52 @@ async function refresh() {
 
     $('r-down').textContent = rate(status.router.downBytesPerSec);
     $('r-up').textContent = rate(status.router.upBytesPerSec);
-    const rh = await getJson(`api/router/history?minutes=${minutes}`);
-    plot(routerChart, rh);
-    $('r-sub').textContent = summary(rh);
 
     const mac = $('device').value;
+    if (mac !== lastMac) { lastMac = mac; chartsDirty = true; }
+    const dev = devices.find(d => d.mac === mac);
     if (mac) {
-      const dev = devices.find(d => d.mac === mac);
       $('d-down').textContent = dev ? rate(dev.downBytesPerSec) : 'offline';
       $('d-up').textContent = dev ? rate(dev.upBytesPerSec) : 'offline';
-      const dh = await getJson(`api/devices/${encodeURIComponent(mac)}/history?minutes=${minutes}`);
+    }
+
+    // Charts of a past window are static, so only redraw them when live or when the window/device changed.
+    if (windowEnd !== null && !chartsDirty) return;
+    const end = effectiveEnd();
+    const to = windowEnd === null ? '' : `&to=${end}`;
+    const rh = await getJson(`api/router/history?minutes=${minutes}${to}`);
+    let dh = null;
+    if (mac) dh = await getJson(`api/devices/${encodeURIComponent(mac)}/history?minutes=${minutes}${to}`);
+    if (seq !== refreshSeq) return;
+
+    plot(routerChart, rh);
+    $('r-sub').textContent = summary(rh);
+    if (dh) {
       plot(deviceChart, dh);
       $('d-sub').textContent = summary(dh) + (dev ? ` · ${dev.connectionType} ${dev.interface}`.trimEnd() : '');
     }
+    chartsDirty = false;
   } catch (e) {
+    if (seq !== refreshSeq) return;
     $('status').textContent = e.message;
     $('status').className = 'err';
   }
 }
 
-$('range').addEventListener('change', refresh);
-$('device').addEventListener('change', () => { localStorage.setItem('device', $('device').value); $('device').blur(); refresh(); });
+$('range').addEventListener('change', () => { localStorage.setItem('range', $('range').value); setWindowEnd(effectiveEnd()); });
+$('step').value = localStorage.getItem('step') || $('step').value;
+$('step').addEventListener('change', () => localStorage.setItem('step', $('step').value));
+$('back').addEventListener('click', () => { if (canGoBack()) setWindowEnd(effectiveEnd() - stepSec()); });
+$('fwd').addEventListener('click', () => { if (windowEnd !== null) setWindowEnd(windowEnd + stepSec()); });
+$('now').addEventListener('click', () => setWindowEnd(nowSec()));
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea') || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === 'ArrowLeft') $('back').click();
+  else if (e.key === 'ArrowRight') $('fwd').click();
+  else if (e.key === 'End') $('now').click();
+});
+$('range').value = localStorage.getItem('range') || $('range').value;
+$('device').addEventListener('change', () => { localStorage.setItem('device', $('device').value); $('device').blur(); chartsDirty = true; refresh(); });
 for (const id of ['sortBy', 'sortDir']) {
   const el = $(id);
   el.value = localStorage.getItem(id) || el.value;
@@ -228,5 +315,6 @@ $('u-custom').hidden = $('u-range').value !== 'custom';
 refreshUsage().catch(e => { $('u-router').textContent = e.message; });
 setInterval(() => refreshUsage().catch(() => {}), 30000);
 
+updateNav();
 refresh();
 setInterval(refresh, REFRESH_MS);

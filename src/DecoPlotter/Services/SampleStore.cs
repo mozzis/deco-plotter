@@ -157,6 +157,14 @@ public sealed class SampleStore
         tx.Commit();
     }
 
+    public long? OldestSample()
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT MIN(ts) FROM samples";
+        return cmd.ExecuteScalar() is long t ? t : null;
+    }
+
     public void Purge(long olderThanTs)
     {
         using var c = Open();
