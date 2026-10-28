@@ -11,6 +11,15 @@ public sealed record HistoryResult(
     double TotalUpBytes, double TotalDownBytes, double PeakUp, double PeakDown,
     IReadOnlyList<HistoryPoint> Points);
 
+public sealed record UsageRow(string Mac, string Name, string Ip, double UpBytes, double DownBytes)
+{
+    public double TotalBytes => UpBytes + DownBytes;
+}
+
+public sealed record UsageResult(string From, string To, UsageRow Router, IReadOnlyList<UsageRow> Devices);
+
+public sealed record DailyUsage(string Day, double UpBytes, double DownBytes);
+
 public sealed class SampleStore
 {
     public const string RouterKey = "ROUTER";
@@ -27,7 +36,76 @@ public sealed class SampleStore
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS samples(ts INTEGER NOT NULL, mac TEXT NOT NULL, up REAL NOT NULL, down REAL NOT NULL, dt REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS ix_samples_mac_ts ON samples(mac, ts);
+            CREATE TABLE IF NOT EXISTS daily(day TEXT NOT NULL, mac TEXT NOT NULL, up REAL NOT NULL, down REAL NOT NULL, PRIMARY KEY(day, mac));
+            CREATE TABLE IF NOT EXISTS devices(mac TEXT PRIMARY KEY, name TEXT NOT NULL, ip TEXT NOT NULL, last_seen INTEGER NOT NULL);
             """);
+
+        // First run after upgrade: seed the rollup from the raw samples already collected.
+        Exec(c, """
+            INSERT INTO daily(day, mac, up, down)
+            SELECT strftime('%Y-%m-%d', ts, 'unixepoch', 'localtime'), mac, SUM(up*dt), SUM(down*dt)
+            FROM samples WHERE (SELECT COUNT(*) FROM daily) = 0 GROUP BY 1, 2;
+            """);
+    }
+
+    public static string DayOf(long ts) => DateTimeOffset.FromUnixTimeSeconds(ts).ToLocalTime().ToString("yyyy-MM-dd");
+
+    public void UpsertDevices(long ts, IEnumerable<DecoClientInfo> devices)
+    {
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO devices(mac,name,ip,last_seen) VALUES($mac,$name,$ip,$ts)
+            ON CONFLICT(mac) DO UPDATE SET name=excluded.name, ip=excluded.ip, last_seen=excluded.last_seen
+            """;
+        var pMac = cmd.Parameters.Add("$mac", SqliteType.Text);
+        var pName = cmd.Parameters.Add("$name", SqliteType.Text);
+        var pIp = cmd.Parameters.Add("$ip", SqliteType.Text);
+        var pTs = cmd.Parameters.Add("$ts", SqliteType.Integer);
+        foreach (var d in devices)
+        {
+            pMac.Value = d.Mac; pName.Value = d.Name; pIp.Value = d.Ip; pTs.Value = ts;
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    public UsageResult QueryUsage(string fromDay, string toDay)
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = """
+            SELECT d.mac, COALESCE(v.name,''), COALESCE(v.ip,''), SUM(d.up), SUM(d.down)
+            FROM daily d LEFT JOIN devices v ON v.mac = d.mac
+            WHERE d.day >= $from AND d.day <= $to GROUP BY d.mac
+            """;
+        cmd.Parameters.AddWithValue("$from", fromDay);
+        cmd.Parameters.AddWithValue("$to", toDay);
+        var rows = new List<UsageRow>();
+        UsageRow? router = null;
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var row = new UsageRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetDouble(3), r.GetDouble(4));
+            if (row.Mac == RouterKey) router = row; else rows.Add(row);
+        }
+        return new UsageResult(fromDay, toDay, router ?? new UsageRow(RouterKey, "Router", "", 0, 0), rows);
+    }
+
+    public IReadOnlyList<DailyUsage> QueryDaily(string key, string fromDay, string toDay)
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT day, up, down FROM daily WHERE mac=$mac AND day>=$from AND day<=$to ORDER BY day";
+        cmd.Parameters.AddWithValue("$mac", key);
+        cmd.Parameters.AddWithValue("$from", fromDay);
+        cmd.Parameters.AddWithValue("$to", toDay);
+        var list = new List<DailyUsage>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) list.Add(new DailyUsage(r.GetString(0), r.GetDouble(1), r.GetDouble(2)));
+        return list;
     }
 
     private SqliteConnection Open()
@@ -56,10 +134,25 @@ public sealed class SampleStore
         var pUp = cmd.Parameters.Add("$up", SqliteType.Real);
         var pDown = cmd.Parameters.Add("$down", SqliteType.Real);
         var pDt = cmd.Parameters.Add("$dt", SqliteType.Real);
+
+        using var roll = c.CreateCommand();
+        roll.Transaction = tx;
+        roll.CommandText = """
+            INSERT INTO daily(day,mac,up,down) VALUES($day,$mac,$up,$down)
+            ON CONFLICT(day,mac) DO UPDATE SET up=up+excluded.up, down=down+excluded.down
+            """;
+        var rDay = roll.Parameters.Add("$day", SqliteType.Text);
+        var rMac = roll.Parameters.Add("$mac", SqliteType.Text);
+        var rUp = roll.Parameters.Add("$up", SqliteType.Real);
+        var rDown = roll.Parameters.Add("$down", SqliteType.Real);
+        rDay.Value = DayOf(ts);
+
         foreach (var (key, up, down) in rows)
         {
             pTs.Value = ts; pMac.Value = key; pUp.Value = up; pDown.Value = down; pDt.Value = dtSeconds;
             cmd.ExecuteNonQuery();
+            rMac.Value = key; rUp.Value = up * dtSeconds; rDown.Value = down * dtSeconds;
+            roll.ExecuteNonQuery();
         }
         tx.Commit();
     }

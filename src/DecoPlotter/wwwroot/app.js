@@ -68,17 +68,40 @@ function summary(h) {
 }
 
 let deviceListKey = '';
-function syncDeviceList(devices) {
+let lastDevices = [];
+
+function ipValue(ip) {
+  const p = (ip || '').split('.').map(Number);
+  return p.length === 4 && p.every(n => Number.isInteger(n)) ? p.reduce((a, n) => a * 256 + n, 0) : Infinity;
+}
+
+function sortDevices(devices) {
+  const by = $('sortBy').value;
+  const dir = $('sortDir').value === 'desc' ? -1 : 1;
+  const cmp = {
+    name: (a, b) => (a.name || a.mac).localeCompare(b.name || b.mac, undefined, { sensitivity: 'base', numeric: true }),
+    ip: (a, b) => ipValue(a.ip) - ipValue(b.ip),
+    down: (a, b) => a.downBytesPerSec - b.downBytesPerSec,
+  }[by];
+  // Ties fall back to name so the order is stable between refreshes.
+  return [...devices].sort((a, b) => dir * cmp(a, b) || a.name.localeCompare(b.name));
+}
+
+function syncDeviceList(devices, force = false) {
   const sel = $('device');
-  const key = devices.map(d => d.mac + d.name).sort().join('|');
-  if (key === deviceListKey) return;
+  const sorted = sortDevices(devices);
+  const rateSort = $('sortBy').value === 'down';
+  const key = sorted.map(d => d.mac + d.name + d.ip + (rateSort ? Math.round(d.downBytesPerSec) : '')).join('|');
+  if (!force && key === deviceListKey) return;
+  // Don't reshuffle the list under the cursor while the dropdown is open.
+  if (!force && document.activeElement === sel) return;
   deviceListKey = key;
   const previous = sel.value || localStorage.getItem('device');
   sel.innerHTML = '';
-  for (const d of [...devices].sort((a, b) => (a.name || a.mac).localeCompare(b.name || b.mac))) {
+  for (const d of sorted) {
     const o = document.createElement('option');
     o.value = d.mac;
-    o.textContent = `${d.name || '(unnamed)'} — ${d.ip || d.mac}`;
+    o.textContent = `${d.name || '(unnamed)'} — ${d.ip || d.mac}` + (rateSort ? ` — ${rate(d.downBytesPerSec)}` : '');
     sel.appendChild(o);
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
@@ -88,6 +111,7 @@ async function refresh() {
   const minutes = $('range').value;
   try {
     const [status, devices] = await Promise.all([getJson('api/status'), getJson('api/devices')]);
+    lastDevices = devices;
     syncDeviceList(devices);
 
     const st = $('status');
@@ -117,6 +141,92 @@ async function refresh() {
 }
 
 $('range').addEventListener('change', refresh);
-$('device').addEventListener('change', () => { localStorage.setItem('device', $('device').value); refresh(); });
+$('device').addEventListener('change', () => { localStorage.setItem('device', $('device').value); $('device').blur(); refresh(); });
+for (const id of ['sortBy', 'sortDir']) {
+  const el = $(id);
+  el.value = localStorage.getItem(id) || el.value;
+  el.addEventListener('change', () => {
+    localStorage.setItem(id, el.value);
+    syncDeviceList(lastDevices, true);
+    refresh();
+  });
+}
+let usage = { devices: [], router: null };
+let usageSort = { key: 'total', dir: -1 };
+
+function usageQuery() {
+  const range = $('u-range').value;
+  if (range !== 'custom') return `range=${range}`;
+  const from = $('u-from').value, to = $('u-to').value;
+  return from && to && to >= from ? `range=custom&from=${from}&to=${to}` : null;
+}
+
+function renderUsage() {
+  const k = usageSort.key;
+  const val = {
+    name: d => (d.name || d.mac).toLowerCase(),
+    ip: d => ipValue(d.ip),
+    down: d => d.downBytes,
+    up: d => d.upBytes,
+    total: d => d.totalBytes,
+  }[k];
+  const rows = [...usage.devices].sort((a, b) => {
+    const x = val(a), y = val(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * usageSort.dir;
+  });
+  const body = document.querySelector('#u-table tbody');
+  body.innerHTML = '';
+  for (const d of rows) {
+    const tr = document.createElement('tr');
+    tr.dataset.mac = d.mac;
+    const cells = [d.name || d.mac, d.ip, bytes(d.downBytes), bytes(d.upBytes), bytes(d.totalBytes)];
+    cells.forEach((text, i) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (i >= 2) td.className = 'num';
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+  document.querySelectorAll('#u-table th').forEach(th => {
+    const numeric = ['down', 'up', 'total'].includes(th.dataset.k);
+    const sorted = th.dataset.k === k ? (usageSort.dir > 0 ? ' sorted-asc' : ' sorted-desc') : '';
+    th.className = (numeric ? 'num' : '') + sorted;
+  });
+}
+
+async function refreshUsage() {
+  const q = usageQuery();
+  if (!q) return;
+  const u = await getJson(`api/usage?${q}`);
+  usage = { devices: u.devices.map(d => ({ ...d, totalBytes: d.upBytes + d.downBytes })), router: u.router };
+  $('u-router').textContent = `${u.from === u.to ? u.from : `${u.from} → ${u.to}`} · Router total ▼ ${bytes(u.router.downBytes)} ▲ ${bytes(u.router.upBytes)} (${bytes(u.router.upBytes + u.router.downBytes)})`;
+  renderUsage();
+}
+
+document.querySelectorAll('#u-table th').forEach(th => th.addEventListener('click', () => {
+  const key = th.dataset.k;
+  usageSort = { key, dir: usageSort.key === key ? -usageSort.dir : (key === 'name' || key === 'ip' ? 1 : -1) };
+  renderUsage();
+}));
+document.querySelector('#u-table tbody').addEventListener('click', e => {
+  const mac = e.target.closest('tr')?.dataset.mac;
+  const sel = $('device');
+  if (mac && [...sel.options].some(o => o.value === mac)) { sel.value = mac; localStorage.setItem('device', mac); refresh(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+});
+
+for (const id of ['u-range', 'u-from', 'u-to']) {
+  const el = $(id);
+  el.value = localStorage.getItem(id) || el.value;
+  el.addEventListener('change', () => {
+    localStorage.setItem(id, el.value);
+    $('u-custom').hidden = $('u-range').value !== 'custom';
+    refreshUsage().catch(e => { $('u-router').textContent = e.message; });
+  });
+}
+$('u-custom').hidden = $('u-range').value !== 'custom';
+refreshUsage().catch(e => { $('u-router').textContent = e.message; });
+setInterval(() => refreshUsage().catch(() => {}), 30000);
+
 refresh();
 setInterval(refresh, REFRESH_MS);

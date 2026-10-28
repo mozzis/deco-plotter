@@ -39,6 +39,7 @@ public sealed class PollingService(
                 var rows = online.Select(c => (c.Mac, c.UpBytesPerSec, c.DownBytesPerSec))
                     .Append((SampleStore.RouterKey, router.UpBytesPerSec, router.DownBytesPerSec));
                 store.Add(now.ToUnixTimeSeconds(), dt, rows);
+                store.UpsertDevices(now.ToUnixTimeSeconds(), clients);
                 state.Update(new LiveSnapshot(now, now, null, router, clients));
                 lastPoll = now;
 

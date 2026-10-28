@@ -52,4 +52,47 @@ api.MapGet("/devices/{mac}/history", (string mac, SampleStore store, int minutes
     return store.Query(NormalizeMac(mac), from, to, maxPoints);
 });
 
+api.MapGet("/usage", (SampleStore store, string range = "today", string? from = null, string? to = null) =>
+{
+    if (!TryResolveDays(range, from, to, out var f, out var t, out var error)) return Results.BadRequest(error);
+    return Results.Ok(store.QueryUsage(f, t));
+});
+
+api.MapGet("/usage/{mac}/daily", (string mac, SampleStore store, string range = "last30", string? from = null, string? to = null) =>
+{
+    if (!TryResolveDays(range, from, to, out var f, out var t, out var error)) return Results.BadRequest(error);
+    return Results.Ok(store.QueryDaily(mac.Equals("router", StringComparison.OrdinalIgnoreCase) ? SampleStore.RouterKey : NormalizeMac(mac), f, t));
+});
+
 app.Run();
+
+static bool TryResolveDays(string range, string? from, string? to, out string f, out string t, out string? error)
+{
+    var today = DateOnly.FromDateTime(DateTime.Now);
+    error = null;
+    DateOnly a, b;
+    switch (range.ToLowerInvariant())
+    {
+        case "today": a = b = today; break;
+        case "yesterday": a = b = today.AddDays(-1); break;
+        case "week": a = today.AddDays(-(((int)today.DayOfWeek + 6) % 7)); b = today; break; // weeks start Monday
+        case "month": a = new DateOnly(today.Year, today.Month, 1); b = today; break;
+        case "last7": a = today.AddDays(-6); b = today; break;
+        case "last30": a = today.AddDays(-29); b = today; break;
+        case "custom":
+            if (!DateOnly.TryParseExact(from, "yyyy-MM-dd", out a) || !DateOnly.TryParseExact(to, "yyyy-MM-dd", out b) || b < a)
+            {
+                f = t = "";
+                error = "custom range needs from and to as yyyy-MM-dd, with to >= from.";
+                return false;
+            }
+            break;
+        default:
+            f = t = "";
+            error = "range must be today, yesterday, week, month, last7, last30 or custom.";
+            return false;
+    }
+    f = a.ToString("yyyy-MM-dd");
+    t = b.ToString("yyyy-MM-dd");
+    return true;
+}

@@ -22,6 +22,14 @@
   .down { color:var(--down); } .up { color:var(--up); }
   .chart { position:relative; height:300px; }
   .sub { color:var(--dim); font-size:12px; margin-top:6px; font-variant-numeric:tabular-nums; }
+  .table-wrap { max-height:420px; overflow:auto; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--border); }
+  th { cursor:pointer; position:sticky; top:0; background:var(--panel); user-select:none; }
+  th.sorted-asc::after { content:" ▲"; } th.sorted-desc::after { content:" ▼"; }
+  .num { text-align:right; }
+  tbody tr { cursor:pointer; } tbody tr:hover { background:#ffffff0a; }
+  input[type=date] { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:4px 6px; font:inherit; }
 </style>
 </head>
 <body>
@@ -51,12 +59,53 @@
   <section>
     <div class="head">
       <h2>Device</h2>
+      <label>Sort
+        <select id="sortBy">
+          <option value="name">Name</option>
+          <option value="ip">IP address</option>
+          <option value="down">Download rate</option>
+        </select>
+      </label>
+      <select id="sortDir">
+        <option value="asc">Ascending</option>
+        <option value="desc">Descending</option>
+      </select>
       <select id="device"></select>
       <span class="stat">▼ <b class="down" id="d-down">–</b></span>
       <span class="stat">▲ <b class="up" id="d-up">–</b></span>
     </div>
     <div class="chart"><canvas id="deviceChart"></canvas></div>
     <div class="sub" id="d-sub"></div>
+  </section>
+  <section>
+    <div class="head">
+      <h2>Data usage</h2>
+      <select id="u-range">
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="week">This week</option>
+        <option value="month" selected>This month</option>
+        <option value="last7">Last 7 days</option>
+        <option value="last30">Last 30 days</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <span id="u-custom" hidden>
+        <input type="date" id="u-from"> – <input type="date" id="u-to">
+      </span>
+    </div>
+    <div class="sub" id="u-router"></div>
+    <div class="table-wrap">
+      <table id="u-table">
+        <thead>
+          <tr>
+            <th data-k="name">Device</th><th data-k="ip">IP</th>
+            <th data-k="down" class="num">Downloaded</th><th data-k="up" class="num">Uploaded</th><th data-k="total" class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="sub">Estimated from the router's reported speeds. Totals are kept per calendar day (server local time) and are not purged.</div>
   </section>
 </main>
 <script src="lib/chart.umd.js"></script>
