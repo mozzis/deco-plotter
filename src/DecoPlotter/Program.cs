@@ -34,7 +34,11 @@ builder.Services.AddOpenApi(o => o.AddDocumentTransformer((doc, _, _) =>
 
 var app = builder.Build();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Force revalidation so the browser never mixes a stale app.js with a fresh index.html.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache"
+});
 app.MapOpenApi();
 app.MapScalarApiReference("/docs", o => o.WithTitle("Deco Plotter API").WithOpenApiRoutePattern("/openapi/v1.json"));
 

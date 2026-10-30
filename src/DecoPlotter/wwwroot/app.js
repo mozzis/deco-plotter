@@ -137,6 +137,7 @@ function sortDevices(devices) {
   const cmp = {
     name: (a, b) => (a.name || a.mac).localeCompare(b.name || b.mac, undefined, { sensitivity: 'base', numeric: true }),
     ip: (a, b) => ipValue(a.ip) - ipValue(b.ip),
+    mac: (a, b) => a.mac.localeCompare(b.mac),
     down: (a, b) => a.downBytesPerSec - b.downBytesPerSec,
   }[by];
   // Ties fall back to name so the order is stable between refreshes.
@@ -157,7 +158,7 @@ function syncDeviceList(devices, force = false) {
   for (const d of sorted) {
     const o = document.createElement('option');
     o.value = d.mac;
-    o.textContent = `${d.name || '(unnamed)'} — ${d.ip || d.mac}` + (rateSort ? ` — ${rate(d.downBytesPerSec)}` : '');
+    o.textContent = `${d.name || '(unnamed)'} — ${d.ip ? `${d.ip} — ${d.mac}` : d.mac}` + (rateSort ? ` — ${rate(d.downBytesPerSec)}` : '');
     sel.appendChild(o);
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
@@ -253,6 +254,7 @@ function renderUsage() {
   const val = {
     name: d => (d.name || d.mac).toLowerCase(),
     ip: d => ipValue(d.ip),
+    mac: d => d.mac,
     down: d => d.downBytes,
     up: d => d.upBytes,
     total: d => d.totalBytes,
@@ -266,11 +268,11 @@ function renderUsage() {
   for (const d of rows) {
     const tr = document.createElement('tr');
     tr.dataset.mac = d.mac;
-    const cells = [d.name || d.mac, d.ip, bytes(d.downBytes), bytes(d.upBytes), bytes(d.totalBytes)];
+    const cells = [d.name || d.mac, d.ip, d.mac, bytes(d.downBytes), bytes(d.upBytes), bytes(d.totalBytes)];
     cells.forEach((text, i) => {
       const td = document.createElement('td');
       td.textContent = text;
-      if (i >= 2) td.className = 'num';
+      if (i >= 3) td.className = 'num';
       tr.appendChild(td);
     });
     body.appendChild(tr);
@@ -293,7 +295,7 @@ async function refreshUsage() {
 
 document.querySelectorAll('#u-table th').forEach(th => th.addEventListener('click', () => {
   const key = th.dataset.k;
-  usageSort = { key, dir: usageSort.key === key ? -usageSort.dir : (key === 'name' || key === 'ip' ? 1 : -1) };
+  usageSort = { key, dir: usageSort.key === key ? -usageSort.dir : (key === 'name' || key === 'ip' || key === 'mac' ? 1 : -1) };
   renderUsage();
 }));
 document.querySelector('#u-table tbody').addEventListener('click', e => {
